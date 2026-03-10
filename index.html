@@ -356,8 +356,49 @@
   .empty-state-icon { font-size: 48px; margin-bottom: 12px; }
   .empty-state p { font-size: 14px; }
 
+  /* BOTTOM NAV - mobile only */
+  .bottom-nav {
+    display: none;
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 200;
+    background: var(--ink2);
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding: 8px 0 max(8px, env(safe-area-inset-bottom));
+    justify-content: space-around; align-items: center;
+  }
+  .bn-item {
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    cursor: pointer; padding: 6px 12px; border-radius: 12px;
+    color: rgba(255,255,255,0.45); transition: all 0.2s; flex: 1;
+  }
+  .bn-item.active { color: var(--gold); }
+  .bn-item .bn-icon { font-size: 20px; }
+  .bn-item .bn-label { font-size: 10px; font-weight: 500; letter-spacing: 0.3px; }
+  .bn-item .bn-badge {
+    position: absolute; top: 2px; right: 8px;
+    background: var(--accent); color: white;
+    border-radius: 50px; padding: 1px 5px; font-size: 9px; min-width: 16px; text-align: center;
+  }
+  .bn-item { position: relative; }
+
   /* RESPONSIVE */
-  @media (max-width: 900px) {
+  @media (max-width: 700px) {
+    .sidebar { display: none; }
+    .bottom-nav { display: flex; }
+    .main { padding: 18px 16px 90px; }
+    .stats-row { grid-template-columns: repeat(2,1fr); gap: 10px; }
+    .form-row { grid-template-columns: 1fr; }
+    .header-actions .btn-voice span, .header-actions .btn-gold span { display: none; }
+    .btn-voice { padding: 8px 12px; }
+    .btn-gold { padding: 8px 12px; font-size: 12px; }
+    .view-title { font-size: 22px; }
+    .week-grid { overflow-x: auto; }
+    .week-header, .time-grid { min-width: 560px; }
+    .notif-panel { right: 8px; left: 8px; width: auto; }
+    .projects-grid { grid-template-columns: 1fr; }
+    .modal { padding: 20px 16px; }
+    .vs-grid { grid-template-columns: 1fr; }
+  }
+  @media (min-width: 701px) and (max-width: 900px) {
     .sidebar { width: 58px; min-width: 58px; padding: 16px 8px; }
     .sidebar-section, .nav-item span, .mini-cal { display: none; }
     .nav-item { justify-content: center; }
@@ -386,6 +427,26 @@
     <button class="btn btn-gold" onclick="openModal()">+ Nueva Tarea</button>
   </div>
 </header>
+
+<!-- BOTTOM NAV (mobile) -->
+<nav class="bottom-nav" id="bottomNav">
+  <div class="bn-item active" id="bn0" onclick="setViewMobile('hoy',0)">
+    <span class="bn-icon">📌</span><span class="bn-label">Hoy</span>
+  </div>
+  <div class="bn-item" id="bn1" onclick="setViewMobile('semana',1)">
+    <span class="bn-icon">📆</span><span class="bn-label">Semana</span>
+  </div>
+  <div class="bn-item" id="bn2" onclick="setViewMobile('mes',2)">
+    <span class="bn-icon">🗓️</span><span class="bn-label">Mes</span>
+  </div>
+  <div class="bn-item" id="bn3" onclick="setViewMobile('tareas',3)">
+    <span class="bn-icon">✅</span><span class="bn-label">Tareas</span>
+    <span class="bn-badge" id="bnBadge">0</span>
+  </div>
+  <div class="bn-item" id="bn4" onclick="setViewMobile('proyectos',4)">
+    <span class="bn-icon">🚀</span><span class="bn-label">Proyectos</span>
+  </div>
+</nav>
 
 <!-- NOTIFICATION PANEL -->
 <div class="notif-panel" id="notifPanel">
@@ -566,6 +627,7 @@ let selectedReminders = ['15min'];
 let editingTaskId = null;
 let alarmQueue = [];
 let currentAlarm = null;
+let sessionFired = {}; // tracks reminders already shown this session
 
 const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DAYS_ES = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
@@ -612,6 +674,13 @@ function loadDemoTasks() {
 }
 
 // ======= VIEWS =======
+function setViewMobile(v, idx) {
+  setView(v, null);
+  document.querySelectorAll('.bn-item').forEach((b,i) => b.classList.toggle('active', i === idx));
+  // also sync sidebar
+  document.querySelectorAll('.nav-item').forEach((n,i) => n.classList.toggle('active', i === idx));
+}
+
 function setView(v, el) {
   currentView = v;
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
@@ -1056,11 +1125,49 @@ function jumpToDate(dStr) {
 function checkAlarms() {
   const now = new Date();
   const nowStr = now.toISOString().split('T')[0];
-  const nowTime = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-  tasks.filter(t=>!t.done&&t.notifAlarm&&t.timeEnd&&t.dateEnd).forEach(t => {
-    if (t.dateEnd === nowStr && t.timeEnd <= nowTime && !t._alarmFired) {
-      t._alarmFired = true;
-      queueAlarm(t);
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+
+  tasks.filter(t => !t.done).forEach(t => {
+    // --- ALARM: fires when task end time is reached ---
+    if (t.notifAlarm && t.timeEnd && t.dateEnd) {
+      if (t.dateEnd === nowStr && !t._alarmFired) {
+        const [eh, em] = t.timeEnd.split(':').map(Number);
+        const endMins = eh * 60 + em;
+        if (nowMins >= endMins && nowMins < endMins + 2) {
+          t._alarmFired = true;
+          save();
+          queueAlarm(t);
+        }
+      }
+    }
+    // --- REMINDERS: fire at the right offset before task start ---
+    if (t.notifApp && t.reminders && t.timeStart && t.dateStart && !t._remindersFired) {
+      const [sh, sm] = t.timeStart.split(':').map(Number);
+      const startMins = sh * 60 + sm;
+      const offsets = { '15min': 15, '1h': 60, '1d': 1440, 'start': 0, 'end': 0 };
+      t.reminders.forEach(r => {
+        const key = `_rem_${t.id}_${r}`;
+        if (sessionFired[key]) return;
+        let shouldFire = false;
+        if (r === 'start' && t.dateStart === nowStr && nowMins >= startMins && nowMins < startMins + 2) shouldFire = true;
+        else if (r === '15min' && t.dateStart === nowStr) {
+          const target = startMins - 15;
+          if (nowMins >= target && nowMins < target + 2) shouldFire = true;
+        } else if (r === '1h' && t.dateStart === nowStr) {
+          const target = startMins - 60;
+          if (nowMins >= target && nowMins < target + 2) shouldFire = true;
+        } else if (r === '1d') {
+          // Fire at same time the day before
+          const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() + 1);
+          const yStr = yesterday.toISOString().split('T')[0];
+          if (t.dateStart === yStr && nowMins >= startMins && nowMins < startMins + 2) shouldFire = true;
+        }
+        if (shouldFire) {
+          sessionFired[key] = true;
+          const labels = { '15min':'15 minutos', '1h':'1 hora', '1d':'1 día', 'start':'ahora' };
+          addNotif('reminder', `🔔 Recordatorio (${labels[r]||r}): ${t.title}`, now.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'}));
+        }
+      });
     }
   });
 }
@@ -1124,6 +1231,8 @@ function formatDate(s) {
 function updatePendBadge() {
   const n = tasks.filter(t=>!t.done).length;
   document.getElementById('pendBadge').textContent = n;
+  const bb = document.getElementById('bnBadge');
+  if (bb) bb.textContent = n;
 }
 function bindTaskEvents() {}
 
